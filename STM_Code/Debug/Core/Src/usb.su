@@ -1,0 +1,4 @@
+../Core/Src/usb.c:9:6:USB_Device_Init	8	static
+../Core/Src/usb.c:31:6:USB_OTG_FS_PowerOn	8	static
+../Core/Src/usb.c:36:6:USB_OTG_FS_PowerOff	8	static
+../Core/Src/usb.c:42:13:Error_Handler	4	static

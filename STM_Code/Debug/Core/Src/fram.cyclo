@@ -1,0 +1,5 @@
+../Core/Src/fram.c:7:6:FRAM_Init	1
+../Core/Src/fram.c:13:19:FRAM_WriteByte	1
+../Core/Src/fram.c:24:19:FRAM_ReadByte	2
+../Core/Src/fram.c:42:19:FRAM_WritePage	4
+../Core/Src/fram.c:61:19:FRAM_ReadPage	3
