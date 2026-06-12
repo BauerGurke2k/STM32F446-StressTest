@@ -1,0 +1,5 @@
+pyserial
+python-can
+fastapi
+uvicorn
+jinja2

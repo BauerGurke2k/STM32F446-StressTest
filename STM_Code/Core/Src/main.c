@@ -28,7 +28,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "app_stats.h"
+#include "app_stress_test.h"
+#include "app_protocol.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -61,7 +63,10 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+// DWT cycle counter for microsecond timing
+#define DWT_CONTROL *(volatile uint32_t*)0xE0001000
+#define DWT_CYCCNT  *(volatile uint32_t*)0xE0001004
+#define CPU_FREQUENCY_MHZ (SystemCoreClock / 1000000)
 /* USER CODE END 0 */
 
 /**
@@ -98,65 +103,25 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
+  // DWT cycle counter enable
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT_CONTROL |= 1;
 
-  // Initialize OLED
-  if (OLED_Init(&holed, &hi2c3, OLED_I2C_ADDR_0X3C) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  OLED_Clear(&holed);
-  OLED_SetCursor(&holed, 0, 0);
-  OLED_WriteString(&holed, "USB Debug Init...");
-  OLED_UpdateScreen(&holed);
-  HAL_Delay(500);
+  // Init custom modules
+  stats_init();
+  protocol_init();
+  stress_test_init();
 
-  USBD_StatusTypeDef usb_status;
 
-  usb_status = USBD_Init(&hUsbDeviceFS, &FS_Desc, DEVICE_FS);
-  OLED_SetCursor(&holed, 0, 8);
-  if (usb_status == USBD_OK) {
-    OLED_WriteString(&holed, "USBD_Init: OK");
-  } else {
-    OLED_WriteString(&holed, "USBD_Init: FAIL");
-  }
-  OLED_UpdateScreen(&holed);
-  HAL_Delay(500);
+  // Clear OLED and show startup message
+  oled_Clear();
+  oled_SetCursor(0, 0);
+  oled_WriteString("Stress Test FW", Font_11x18, White);
+  oled_SetCursor(0, 20);
+  oled_WriteString("Starting...", Font_7x10, White);
+  oled_UpdateScreen();
+  HAL_Delay(1500);
 
-  usb_status = USBD_RegisterClass(&hUsbDeviceFS, &USBD_CDC);
-  OLED_SetCursor(&holed, 0, 16);
-  if (usb_status == USBD_OK) {
-    OLED_WriteString(&holed, "USBD_RegisterClass: OK");
-  } else {
-    OLED_WriteString(&holed, "USBD_RegisterClass: FAIL");
-  }
-  OLED_UpdateScreen(&holed);
-  HAL_Delay(500);
-
-  usb_status = USBD_CDC_RegisterInterface(&hUsbDeviceFS, &USBD_Interface_fops_FS);
-  OLED_SetCursor(&holed, 0, 24);
-  if (usb_status == USBD_OK) {
-    OLED_WriteString(&holed, "USBD_CDC_Register: OK");
-  } else {
-    OLED_WriteString(&holed, "USBD_CDC_Register: FAIL");
-  }
-  OLED_UpdateScreen(&holed);
-  HAL_Delay(500);
-
-  usb_status = USBD_Start(&hUsbDeviceFS);
-  OLED_SetCursor(&holed, 0, 32);
-  if (usb_status == USBD_OK) {
-    OLED_WriteString(&holed, "USBD_Start: OK");
-  } else {
-    OLED_WriteString(&holed, "USBD_Start: FAIL");
-  }
-  OLED_UpdateScreen(&holed);
-  HAL_Delay(2000);
-
-  OLED_Clear(&holed);
-  OLED_SetCursor(&holed, 0, 0);
-  OLED_WriteString(&holed, "USB Init Complete");
-  OLED_UpdateScreen(&holed);
-  HAL_Delay(1000);
 
   // Start CAN Peripheral
   if (HAL_CAN_Start(&hcan1) != HAL_OK)
@@ -164,81 +129,90 @@ int main(void)
     Error_Handler();
   }
 
-  CAN_TxHeaderTypeDef TxHeader;
-  uint8_t TxData[8];
-  uint32_t TxMailbox;
+  // Activate CAN RX interrupt
+  if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-  TxHeader.StdId = 0x123;
-  TxHeader.RTR = CAN_RTR_DATA;
-  TxHeader.IDE = CAN_ID_STD;
-  TxHeader.DLC = 8;
-  TxHeader.TransmitGlobalTime = DISABLE;
-
+  // Activate CAN Error interrupts
+  if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_ERROR_WARNING | CAN_IT_ERROR_PASSIVE | CAN_IT_BUS_OFF | CAN_IT_LAST_ERROR_CODE | CAN_IT_ERROR) != HAL_OK)
+  {
+      Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint32_t last_tick = HAL_GetTick();
+  uint32_t last_second_tick = last_tick;
+  uint32_t loop_start_cycles = 0;
+
+
   while (1)
   {
-    // Alle LEDs aus
-    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LED3_GPIO_Port, LED3_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LED4_GPIO_Port, LED4_Pin, GPIO_PIN_SET);
-
-    // USB Debug Informationen auf OLED anzeigen
-    OLED_Clear(&holed);
-    OLED_SetCursor(&holed, 0, 0);
-    OLED_WriteString(&holed, "USB Status:");
-
-    // VBUS Status (PA9)
-    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) == GPIO_PIN_SET)
+    // --- Timing and Uptime ---
+    loop_start_cycles = DWT_CYCCNT;
+    uint32_t current_tick = HAL_GetTick();
+    if(current_tick != last_tick)
     {
-      OLED_SetCursor(&holed, 0, 8);
-      OLED_WriteString(&holed, "VBUS: HIGH");
-    }
-    else
-    {
-      OLED_SetCursor(&holed, 0, 8);
-      OLED_WriteString(&holed, "VBUS: LOW");
+      stats_get()->uptime_ms += (current_tick - last_tick);
+      last_tick = current_tick;
     }
 
-    // D+ Status (PA12)
-    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_12) == GPIO_PIN_SET)
+    if (current_tick - last_second_tick >= 1000)
     {
-      OLED_SetCursor(&holed, 0, 16);
-      OLED_WriteString(&holed, "DP: HIGH");
-    }
-    else
-    {
-      OLED_SetCursor(&holed, 0, 16);
-      OLED_WriteString(&holed, "DP: LOW");
+        stats_get()->uptime_s++;
+        last_second_tick = current_tick;
     }
 
-    // USB Device State
-    // Hier müsstest du den aktuellen USB-Gerätezustand abfragen, 
-    // z.B. über USBD_HandleTypeDef.pClassData->pClass->GetState() oder ähnliches
-    // Da dies komplexer ist und nicht direkt über HAL_GPIO_ReadPin geht,
-    // belasse ich es vorerst bei den Pin-States.
+    stats_get()->main_loop_counter++;
 
-    OLED_UpdateScreen(&holed);
-    HAL_Delay(1000); // Update every 1 second
+    // --- Application Logic ---
+    stress_test_run_slice(); // Runs CPU stress, FRAM test, OLED update
+    protocol_run();          // Runs USB and CAN communication
 
-    CDC_SendMessage_FS("USB CDC Message: %lu\r\n", HAL_GetTick());
-    USART2_Printf("Hello from STM32! Tick: %lu\r\n", HAL_GetTick());
+    // --- LED Management ---
+    app_stats_t* stats = stats_get();
+    // LED1: Heartbeat (toggles every 500ms)
+    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, (stats->uptime_ms % 1000 < 500));
 
-    // Update CAN Tx data
-    TxData[0] = 0xDE;
-    TxData[1] = 0xAD;
-    TxData[2] = 0xBE;
-    TxData[3] = 0xEF;
-    TxData[4] = (uint8_t)((HAL_GetTick() >> 24) & 0xFF);
-    TxData[5] = (uint8_t)((HAL_GetTick() >> 16) & 0xFF);
-    TxData[6] = (uint8_t)((HAL_GetTick() >> 8) & 0xFF);
-    TxData[7] = (uint8_t)(HAL_GetTick() & 0xFF);
+    // LED2: USB Activity (blink on tx)
+    static uint32_t last_usb_tx = 0;
+    if (stats->usb_tx_packets > last_usb_tx) {
+        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
+        last_usb_tx = stats->usb_tx_packets;
+    } else {
+        HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
+    }
 
-    // Send CAN Message
-    HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox);
+    // LED3: CAN Activity (blink on tx/rx)
+     static uint32_t last_can_tx = 0;
+     static uint32_t last_can_rx = 0;
+     if (stats->can_tx_packets > last_can_tx || stats->can_rx_packets > last_can_rx) {
+         HAL_GPIO_WritePin(LED3_GPIO_Port, LED3_Pin, GPIO_PIN_RESET);
+         last_can_tx = stats->can_tx_packets;
+         last_can_rx = stats->can_rx_packets;
+     } else {
+         HAL_GPIO_WritePin(LED3_GPIO_Port, LED3_Pin, GPIO_PIN_SET);
+     }
+
+    // LED4: Error latched
+    if (stats->can_busoff_count > 0 || stats->fram_crc_errors > 0 || stats->i2c_errors > 0)
+    {
+        HAL_GPIO_WritePin(LED4_GPIO_Port, LED4_Pin, GPIO_PIN_RESET); // Error: LED ON
+    } else {
+        HAL_GPIO_WritePin(LED4_GPIO_Port, LED4_Pin, GPIO_PIN_SET);
+    }
+
+
+    // --- Loop time measurement ---
+    uint32_t loop_end_cycles = DWT_CYCCNT;
+    uint32_t loop_time_us = (loop_end_cycles - loop_start_cycles) / CPU_FREQUENCY_MHZ;
+    stats_update_loop_time(loop_time_us);
+
+    // Small delay to yield CPU time if loop is too fast
+    HAL_Delay(1);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -293,6 +267,67 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief  Rx Fifo 0 message pending callback.
+  * @param  hcan: pointer to a CAN_HandleTypeDef structure that contains
+  *         the configuration information for the specified CAN.
+  * @retval None
+  */
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+  CAN_RxHeaderTypeDef rxHeader;
+  uint8_t             rxData[8];
+
+  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK)
+  {
+    protocol_handle_can_rx(&rxHeader, rxData);
+  }
+}
+
+/**
+  * @brief  CAN error callback.
+  * @param  hcan: pointer to a CAN_HandleTypeDef structure that contains
+  *         the configuration information for the specified CAN.
+  * @retval None
+  */
+void HAL_CAN_ErrorCallback(CAN_HandleTypeDef *hcan)
+{
+    app_stats_t* stats = stats_get();
+    uint32_t error = HAL_CAN_GetError(hcan);
+
+    if ((error & HAL_CAN_ERROR_EWG) != 0)
+    {
+        stats->can_error_warning_count++;
+    }
+    if ((error & HAL_CAN_ERROR_EPV) != 0)
+    {
+        stats->can_error_passive_count++;
+    }
+    if ((error & HAL_CAN_ERROR_BOF) != 0)
+    {
+        stats->can_busoff_count++;
+        // Optional: Add recovery logic here, e.g., re-init CAN
+        // Be careful not to get stuck in a re-init loop
+        // HAL_CAN_ResetError(hcan);
+        // HAL_CAN_Start(hcan);
+    }
+}
+
+/**
+  * @brief  This function handles Hard Fault exception.
+  * @retval None
+  */
+void HardFault_Handler(void)
+{
+  stats_get()->hardfault_count++;
+  // Turn on error LED and loop forever
+  HAL_GPIO_WritePin(LED4_GPIO_Port, LED4_Pin, GPIO_PIN_RESET);
+  while(1)
+  {
+      for(int i=0; i < 1000000; i++);
+      HAL_GPIO_TogglePin(LED4_GPIO_Port, LED4_Pin);
+  }
+}
 
 /* USER CODE END 4 */
 

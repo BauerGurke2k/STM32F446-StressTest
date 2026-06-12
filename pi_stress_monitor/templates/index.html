@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STM32 Stress Test Monitor</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f4f4f9; color: #333; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #0056b3; }
+        .grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 15px; margin-top: 20px; }
+        .grid-item { background: #eef; padding: 15px; border-radius: 5px; }
+        .grid-item h3 { margin-top: 0; color: #333; font-size: 1em; border-bottom: 1px solid #ddd; padding-bottom: 5px;}
+        .grid-item p { margin: 5px 0; font-size: 1.2em; font-weight: bold; color: #0056b3; }
+        #status-box { padding: 15px; margin-top: 20px; border-radius: 5px; font-size: 1.5em; font-weight: bold; text-align: center; color: white; }
+        .status-pass { background-color: #28a745; }
+        .status-warn { background-color: #ffc107; color: #333; }
+        .status-fail { background-color: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>STM32 Stress Test Monitor</h1>
+        <div id="status-box" class="">STATUS</div>
+        
+        <div class="grid-container">
+            <div class="grid-item">
+                <h3>Uptime</h3>
+                <p id="uptime">--</p>
+            </div>
+            <div class="grid-item">
+                <h3>Test Status</h3>
+                <p id="test_status">--</p>
+            </div>
+            <div class="grid-item">
+                <h3>USB Connected</h3>
+                <p id="usb_connected">--</p>
+            </div>
+            <div class="grid-item">
+                <h3>USB Packets/s</h3>
+                <p id="usb_packets_per_sec">--</p>
+            </div>
+            <div class="grid-item">
+                <h3>USB Errors (Seq/CRC)</h3>
+                <p id="usb_errors">-- / --</p>
+            </div>
+             <div class="grid-item">
+                <h3>USB Timeouts</h3>
+                <p id="usb_timeouts">--</p>
+            </div>
+            <div class="grid-item">
+                <h3>CAN Packets/s</h3>
+                <p id="can_packets_per_sec">--</p>
+            </div>
+             <div class="grid-item">
+                <h3>CAN RTT (ms)</h3>
+                <p id="can_rtt_ms">--</p>
+            </div>
+            <div class="grid-item">
+                <h3>CAN Errors (Seq/Timeout)</h3>
+                <p id="can_errors">-- / --</p>
+            </div>
+            <div class="grid-item">
+                <h3>STM32 CAN BusOff</h3>
+                <p id="stm32_can_busoff">--</p>
+            </div>
+            <div class="grid-item">
+                <h3>STM32 I2C Errors</h3>
+                <p id="stm32_i2c_errors">--</p>
+            </div>
+            <div class="grid-item">
+                <h3>STM32 FRAM CRC Errors</h3>
+                <p id="stm32_fram_errors">--</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const statusBox = document.getElementById('status-box');
+
+        function updateStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('uptime').textContent = data.test_uptime_str;
+                    document.getElementById('test_status').textContent = data.test_status;
+                    document.getElementById('usb_connected').textContent = data.usb_status.is_connected;
+                    document.getElementById('usb_packets_per_sec').textContent = data.usb_status.packets_per_sec.toFixed(2);
+                    document.getElementById('usb_errors').textContent = `${data.usb_status.seq_errors} / ${data.usb_status.crc_errors}`;
+                    document.getElementById('usb_timeouts').textContent = data.usb_status.timeouts;
+                    
+                    document.getElementById('can_packets_per_sec').textContent = data.can_status.packets_per_sec.toFixed(2);
+                    document.getElementById('can_rtt_ms').textContent = data.can_status.last_rtt_ms !== null ? data.can_status.last_rtt_ms.toFixed(2) : 'N/A';
+                    document.getElementById('can_errors').textContent = `${data.can_status.seq_errors} / ${data.can_status.timeouts}`;
+                    
+                    document.getElementById('stm32_can_busoff').textContent = data.stm32_stats.can_busoff_count;
+                    document.getElementById('stm32_i2c_errors').textContent = data.stm32_stats.i2c_errors;
+                    document.getElementById('stm32_fram_errors').textContent = data.stm32_stats.fram_crc_errors;
+
+                    statusBox.textContent = data.test_status;
+                    statusBox.className = ''; // Clear classes
+                    if (data.test_status === 'PASS') {
+                        statusBox.classList.add('status-pass');
+                    } else if (data.test_status === 'WARN') {
+                        statusBox.classList.add('status-warn');
+                    } else {
+                        statusBox.classList.add('status-fail');
+                    }
+                })
+                .catch(error => console.error('Error fetching status:', error));
+        }
+
+        setInterval(updateStatus, 1000);
+        updateStatus(); // Initial call
+    </script>
+</body>
+</html>
